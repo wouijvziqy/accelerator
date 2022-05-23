@@ -1,38 +1,46 @@
 # Accelerator
 
-[中文介绍](https://github.com/4ra1n/accelerator/tree/master/doc)
+基于`Golang`批量分析Jar包，用于检测`Java`安全漏洞
 
-Batch analysis jar packages using Golang
+这将比`Java ASM`更容易上手使用，且有更高的执行效率
 
-Use to detect security vulnerabilities
+该工具是一个辅助工具，可以帮助安全研究人员快速分析`jar`文件，尤其是对于一些闭源项目
 
-This will be much simpler and faster than Java ASM
+使用此功能的优点是易于上手并检测效率较高（比编写`ASM`的`MethodVisitor`简单很多）
 
-The tool is an auxiliary tool that can help security researchers analyze jar files quickly, especially for some closed source projects
+使用这种方法的缺点是不能进行太多定制操作，并且在多指令规则下可能会出现误报
 
-The advantage of using this is that it is easy to start and efficient detection
+## 快速开始
 
-The disadvantage of using this is that it cannot be customized too much, and there is the possibility of false positives in the case of multiple instructions
+`accelerator`需要指定一个规则文件（默认：rule.txt）
 
-## Quick Start
-
-accelerator need a rule file (default: rule.txt)
-
-Enter a directory of jar files, accelerator will scan all jar files and extract them
+并且需要输入`jar`文件的目录，然后`accelerator`会解压该目录中所有`jar`并扫描其中的`class`文件
 
 ```shell
 ./accelerator -rule your_rule_file -jars your_jar_dir
 ```
 
-In the writing of rule, only **INVOKE** instruction is supported at present
+目前编写规则仅支持`INVOKE`相关的指令（实际上这也是最主要的指令）
+
+todo: 删除具体的INVOKE指令，因为实际情况下容易确定是VIRTUAL或者SPECIAL
+
+### 单指令规则
+
+单指令规则一般用来确定哪些方法中存在危险调用
 
 ```text
 INVOKEVIRTUAL ... *
 ```
 
-If a single instruction is written, the detection is successful if the corresponding instruction in a method
+如果是单一的`INVOKE`指令，对某方法的指令集进行检测的过程中只要匹配到则认为成功
 
-Usually, the desc attribute is not easy to remember, so wildcards such as * are supported
+通常方法的`desc`属性并不容易记，所以可以使用通配符`*`来代替该位置
+
+### 多指令规则
+
+多指令规则将会有更大的用处
+
+todo: 目前仅支持顺序的且一定出现的指令，实际上可以加入“非”条件进行进一步判断
 
 ```text
 INVOKEVIRTUAL [first rule] *
@@ -40,55 +48,66 @@ INVOKEVIRTUAL [next rule] *
 ...
 ```
 
-Rules that support multiple **INVOKE** instructions at the same time
+支持多条`INVOKE`指令的规则，将会按照顺序进行匹配
 
-If the instruction set in the target method matches the calling order of multiple instructions, it is considered to match
+**无论中间夹杂多少其他指令**只要按照顺序可以匹配到每一条指令，则认为成功
 
-## How it Works
+## 工作原理
 
-(1) Unzip the jar file to get all the class files
+（1） 解压缩`jar`文件以获取所有`class`文件
 
-(2) The class file is parsed according to the Oracle Java Specification
+（2） 根据`Oracle Java`规范对`class`文件进行解析
 
-(3) Parse all methods in the method area of all classes to obtain the instruction set
+（3） 解析所有类的方法区域中的方法以获得指令集（在`attr`属性中）
 
-(4) Improve instruction content by finding constant pool
+（4） 通过寻找常量池来改进指令内容（方法名和字符串索引等）
 
-(5) Parse the user rule and match it with the current method instruction set
+（5） 解析用户规则并将其与当前方法的指令集匹配
 
-## Examples
+## 使用示例
 
-Native SQL Inject Rule
+原生的SQL注入规则（拼接字符串）
+
+字符串的拼接在`JVM`中会优化为`StringBuilder.append`方法，如果某方法调用了该方法且存在`SQL`注入的`execute`等方法则有风险
+
 ```text
 INVOKEVIRTUAL java/lang/StringBuilder.append *
 INVOKEINTERFACE java/sql/Statement.executeQuery *
 ```
 
-SQL Inject JdbcTemplate Rule
+基于`JdbcTemplate`的SQL注入规则（拼接字符串）
+
+原理同上，不过执行`SQL`语句的是`JdbcTemplate`类
+
 ```text
 INVOKEVIRTUAL java/lang/StringBuilder.append *
 INVOKEVIRTUAL org/springframework/jdbc/core/JdbcTemplate.query *
 ```
 
-Simple RCE Rule
+简单的`RCE`检测
 ```text
 INVOKEVIRTUAL java/lang/Runtime.exec *
 ```
 
-Simple RCE Rule (Command Inject)
+简单的`RCE`检测（由于字符串拼接导致的命令注入）
+
+原理同上，执行的命令中有拼接字符串的风险
+
 ```text
 INVOKEVIRTUAL java/lang/StringBuilder.append *
 INVOKEVIRTUAL java/lang/Runtime.exec *
 ```
 
-Some SSRF Rule
+一些`SSRF`规则
 - INVOKEVIRTUAL java/net/URL.openConnection *
 - INVOKEVIRTUAL org/apache/http/impl/client/CloseableHttpClient.execute *
 - INVOKEINTERFACE okhttp3/Call.execute *
 
-## Practice
+## 实战
 
 ### log4j-core-2.14.0.jar
+
+定位目标`Jar`中可能存在的`JNDI`注入
 
 Rule
 ```text
@@ -101,6 +120,8 @@ org/apache/logging/log4j/core/net/JndiManager lookup
 ```
 
 ### spring-cloud-gateway-server-3.0.6.jar
+
+寻找目标`Jar`中可能执行的`SPEL`表达式
 
 Rule
 ```text
@@ -115,6 +136,8 @@ org/springframework/cloud/gateway/discovery/DiscoveryClientRouteDefinitionLocato
 org/springframework/cloud/gateway/support/ShortcutConfigurable getValue
 ```
 
+进一步定位目标`SPEL`表达式是否是基于`StandardEvaluationContext`的，此类存在`RCE`风险
+
 Rule
 ```text
 INVOKESPECIAL org/springframework/expression/spel/support/StandardEvaluationContext.<init> *
@@ -128,6 +151,8 @@ org/springframework/cloud/gateway/support/ShortcutConfigurable getValue
 ```
 
 ### spring-cloud-function-context-3.1.0.jar
+
+该案列原理同上
 
 Rule
 ```text
@@ -150,7 +175,7 @@ Result
 org/springframework/cloud/function/context/config/RoutingFunction <init>
 ```
 
-## reference
+## 参考
 
 [Java Class File Format](https://docs.oracle.com/javase/specs/jvms/se8/html/jvms-4.html)
 
