@@ -22,7 +22,7 @@
 
 目前编写规则仅支持`INVOKE`相关的指令（实际上这也是最主要的指令）
 
-todo: 删除具体的INVOKE指令，因为实际情况下容易确定是VIRTUAL或者SPECIAL
+todo: 删除具体的INVOKE指令，因为实际情况下不容易确定是VIRTUAL或者SPECIAL，使用者没有必要了解具体的指令名称
 
 ### 单指令规则
 
